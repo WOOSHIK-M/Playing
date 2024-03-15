@@ -7,6 +7,8 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from pathlib import Path
+
 
 FIELD_WIDTH = FIELD_HEIGHT = 100
 N_OBJECTS = 30
@@ -80,15 +82,8 @@ class Rectangle:
         self.width = width
         self.height = height
         
-        self._charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
-    
-    @property
-    def charges(self) -> list[Charge]:
-        """Move the charge location."""
-        for c in self._charges:
-            c.loc = self.center
-        return self._charges
-    
+        self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
+
     @property
     def size(self) -> float:
         """Get size."""
@@ -104,6 +99,12 @@ class Rectangle:
         """."""
         return Location(x=self.center.x + self.width / 2, y=self.center.y + self.height / 2)
 
+    def move_to_(self, loc: Location) -> None:
+        """Move this rectangle and its charges."""
+        self.center = loc
+        for c in self.charges:
+            c.loc = self.center
+
     def draw_rectangle(self, fig: go.Figure) -> go.Figure:
         """."""
         fig.add_shape(
@@ -116,9 +117,6 @@ class Rectangle:
             opacity=0.5,
         )
         return fig
-
-
-# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 
 
 class ElectricField:
@@ -167,8 +165,6 @@ class ElectricField:
         )
 
 
-
-
 class SimulatedAnnealing:
     """Do SA."""
 
@@ -176,13 +172,51 @@ class SimulatedAnnealing:
         """Initialize."""
         self.electric_field = ElectricField()
 
-        self.dump_img()
+        self.save_dir = Path("save")
+        self.save_dir.mkdir(exist_ok=True, parents=True)
 
-    def dump_img(self) -> None:
+    def run(self) -> None:
+        """Optimize electric field."""
+        init_field, init_reward = self.evaluate_electric_field()
+        self.dump_img(init_field, init_reward, title="0")
+
+        idx = 1
+
+        cur_reward = init_reward
+        while True:
+            obj = random.choice(self.electric_field.objs)   
+            
+            ori_loc = obj.center
+            obj.move_to_(
+                Location(
+                    x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
+                    y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
+                )
+            )
+
+            _, tmp_reward = self.evaluate_electric_field()
+            if tmp_reward >= cur_reward:
+                obj.move_to_(ori_loc)
+            else:
+                cur_reward = tmp_reward
+                print(f"# of epochs: {idx}, potential energy: {cur_reward:.4f}")
+                self.dump_img(*self.evaluate_electric_field(), title=f"{idx}")
+                idx += 1
+
+            if idx == 100:
+                break
+        
+        self.make_gif()
+
+    def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
+        """Return field and entropy."""
+        field = self.electric_field.potential_field
+        return field, entropy(field, axis=None)
+
+    def dump_img(self, field: np.ndarray, reward: float, title: str = "Default") -> None:
         """Dump img."""
         objs = self.electric_field.objs
         charges = self.electric_field.charges
-        field = self.electric_field.potential_field
 
         fig = make_subplots(
             rows=1, 
@@ -228,10 +262,8 @@ class SimulatedAnnealing:
         for obj in objs:
             fig = obj.draw_rectangle(fig)
 
-
         fig.update_yaxes(range=[0, N_ROWS], dtick=1, row=1, col=1)
         fig.update_xaxes(range=[0, N_COLS], dtick=1, row=1, col=1)
-
 
         # 3d
         z = np.array([row[::-1] for row in field[::-1]])
@@ -247,11 +279,24 @@ class SimulatedAnnealing:
         )
 
         fig.update_layout(
-            title_text=f"Entropy: {entropy(field, axis=None):.4f}", 
+            title_text=f"# of epochs: {title}, Entropy: {reward:.4f}", 
             width=1800, 
             height=900,
         )
-        pio.write_image(fig, "png.png")
+        pio.write_image(fig, self.save_dir / f"{title}.png")
 
+    def make_gif(self) -> None:
+        """."""
+        import imageio
+        from PIL import Image
 
-SimulatedAnnealing()
+        # List image files
+        image_files = list(self.save_dir.iterdir())
+        image_files = sorted(image_files, key=lambda x: int(x.stem))
+        images = [Image.open(x) for x in image_files]
+        
+        im = images[0]
+        im.save('result.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
+        print("Done")
+
+SimulatedAnnealing().run()
