@@ -12,6 +12,7 @@ from pathlib import Path
 
 FIELD_WIDTH = FIELD_HEIGHT = 100
 N_OBJECTS = 30
+N_FIXED = 5
 
 N_ROWS = N_COLS = 100
 
@@ -83,6 +84,7 @@ class Rectangle:
         self.height = height
         
         self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
+        self.fixed = False
 
     @property
     def size(self) -> float:
@@ -112,9 +114,9 @@ class Rectangle:
             x1=(self.top_right.x / FIELD_WIDTH + 0.5) * N_COLS,
             y0=(self.bottom_left.y / FIELD_HEIGHT + 0.5) * N_ROWS,
             y1=(self.top_right.y / FIELD_HEIGHT + 0.5) * N_ROWS,
-            line=dict(color="RoyalBlue"),
-            fillcolor="LightSkyBlue",
-            opacity=0.5,
+            line=dict(color="Black" if self.fixed else "RoyalBlue"),
+            fillcolor="Gray" if self.fixed else "LightSkyBlue",
+            opacity=0.8 if self.fixed else 0.5,
         )
         return fig
 
@@ -135,6 +137,10 @@ class ElectricField:
             )
             for _ in range(N_OBJECTS)
         ]
+        self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
+        for obj in self.objs[:N_FIXED]:
+            obj.fixed = True
+        self.movable_objs = [obj for obj in self.objs if not obj.fixed]
 
         self.charges = []
         for obj in self.objs:
@@ -184,7 +190,7 @@ class SimulatedAnnealing:
 
         cur_reward = init_reward
         while True:
-            obj = random.choice(self.electric_field.objs)   
+            obj = random.choice(self.electric_field.movable_objs)   
             
             ori_loc = obj.center
             obj.move_to_(
