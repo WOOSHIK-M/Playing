@@ -1,12 +1,13 @@
 import math
 import random
 import numpy as np
-
-from scipy.stats import entropy
-from plotly.subplots import make_subplots
+import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from scipy.stats import entropy
+from plotly.subplots import make_subplots
+from PIL import Image
 from pathlib import Path
 
 
@@ -114,8 +115,8 @@ class Rectangle:
             x1=(self.top_right.x / FIELD_WIDTH + 0.5) * N_COLS,
             y0=(self.bottom_left.y / FIELD_HEIGHT + 0.5) * N_ROWS,
             y1=(self.top_right.y / FIELD_HEIGHT + 0.5) * N_ROWS,
-            line=dict(color="Black" if self.fixed else "RoyalBlue"),
-            fillcolor="Gray" if self.fixed else "LightSkyBlue",
+            line=dict(color="Gray" if self.fixed else "RoyalBlue"),
+            fillcolor="LightGray" if self.fixed else "LightSkyBlue",
             opacity=0.8 if self.fixed else 0.5,
         )
         return fig
@@ -181,37 +182,47 @@ class SimulatedAnnealing:
         self.save_dir = Path("save")
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
-    def run(self) -> None:
+    def run(
+        self,
+        init_temp: float = 100.0,
+        threshold: float = 1.0,
+        cooling_factor: float = 0.2,
+        n_iters: int = 10,
+    ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
-        self.dump_img(init_field, init_reward, title="0")
+        infos, n_optimized = [(init_temp, init_reward)], 1
+        self.dump_img(init_field, init_reward, infos, title="0")
 
-        idx = 1
-
-        cur_reward = init_reward
-        while True:
-            obj = random.choice(self.electric_field.movable_objs)   
-            
-            ori_loc = obj.center
-            obj.move_to_(
-                Location(
-                    x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
-                    y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
+        cur_temp, cur_reward = init_temp, init_reward
+        while cur_temp > threshold:
+            for _ in range(n_iters):
+                obj = random.choice(self.electric_field.movable_objs)   
+                
+                ori_loc = obj.center
+                obj.move_to_(
+                    Location(
+                        x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
+                        y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
+                    )
                 )
-            )
 
-            _, tmp_reward = self.evaluate_electric_field()
-            if tmp_reward >= cur_reward:
-                obj.move_to_(ori_loc)
-            else:
-                cur_reward = tmp_reward
-                print(f"# of epochs: {idx}, potential energy: {cur_reward:.4f}")
-                self.dump_img(*self.evaluate_electric_field(), title=f"{idx}")
-                idx += 1
+                _, tmp_reward = self.evaluate_electric_field()
+                infos.append((cur_temp, tmp_reward))
 
-            if idx == 100:
-                break
+                if tmp_reward >= cur_reward:
+                    obj.move_to_(ori_loc)
+                else:
+                    cur_reward = tmp_reward                    
+                    self.dump_img(
+                        *self.evaluate_electric_field(), 
+                        infos=infos,
+                        title=f"{n_optimized}"
+                    )
         
+            print(f"Current Temperature: {cur_temp:.4f}, Potential Energy: {cur_reward:.4f}")
+            cur_temp *= cooling_factor
+
         self.make_gif()
 
     def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
@@ -219,20 +230,54 @@ class SimulatedAnnealing:
         field = self.electric_field.potential_field
         return field, entropy(field, axis=None)
 
-    def dump_img(self, field: np.ndarray, reward: float, title: str = "Default") -> None:
+    def dump_img(
+        self, 
+        field: np.ndarray, 
+        reward: float, 
+        infos: list[tuple[float, float]],
+        title: str = "Default") -> None:
         """Dump img."""
         objs = self.electric_field.objs
         charges = self.electric_field.charges
 
+        # set figure specs
         fig = make_subplots(
-            rows=1, 
+            rows=2, 
             cols=2, 
-            specs=[[{'is_3d': False}, {'is_3d': True}]],
+            specs=[
+                [{'is_3d': False}, {'is_3d': True}],
+                [{'colspan': 2, 'is_3d': False}, None],
+            ],
+            row_heights=[0.5, 0.3],
             horizontal_spacing=0.04,
-            subplot_titles=["2D Contour Graph", "3D Contour Grpah"],
+            vertical_spacing=0.1,
+            subplot_titles=[
+                "2D Contour Graph",  # (1, 1)
+                "3D Contour Grpah",  # (1, 2)
+                "Learning Curve",  # (2, 1-2)
+            ],
         )
 
-        # 2d - contour
+        # 2d - contour / charges / box
+        fig = self.draw_potential_field(fig, field=field)
+        fig = self.draw_objects_and_charges(fig, objs=objs, charges=charges)
+
+        # 3d
+        fig = self.draw_surface(fig, field=field)
+
+        # learning curve
+        fig = self.make_learning_curve(fig, infos)
+
+        fig.update_layout(
+            title_text=f"# of epochs: {title}, Entropy: {reward:.4f}", 
+            width=1800, 
+            height=1200,
+        )
+        pio.write_image(fig, self.save_dir / f"{title}.png")
+        exit()
+    
+    def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
+        """Draw contour graph."""
         fig.add_trace(
             go.Contour(
                 x=np.linspace(0, N_COLS - 1, N_COLS) + 0.5,
@@ -243,8 +288,15 @@ class SimulatedAnnealing:
             row=1, 
             col=1,
         )
+        return fig
 
-        # 2d - scatter
+    def draw_objects_and_charges(
+        self, 
+        fig: go.Figure, 
+        objs: list[Rectangle], 
+        charges: list[Charge]
+    ) -> go.Figure:
+        """Draw charges."""
         c_locs = [
             c.loc.get_idx(N_ROWS, N_COLS, FIELD_WIDTH, FIELD_HEIGHT, match_to_bin=False) 
             for c in charges
@@ -264,10 +316,12 @@ class SimulatedAnnealing:
             row=1,
             col=1,
         )
-        # 2d - rectangle
         for obj in objs:
             fig = obj.draw_rectangle(fig)
+        return fig
 
+    def draw_surface(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
+        """Draw objects."""  
         fig.update_yaxes(range=[0, N_ROWS], dtick=1, row=1, col=1)
         fig.update_xaxes(range=[0, N_COLS], dtick=1, row=1, col=1)
 
@@ -283,19 +337,42 @@ class SimulatedAnnealing:
             row=1,
             col=2,
         )
+        return fig
 
-        fig.update_layout(
-            title_text=f"# of epochs: {title}, Entropy: {reward:.4f}", 
-            width=1800, 
-            height=900,
+    def make_learning_curve(self, fig: go.Figure, infos: list[float]) -> go.Figure:
+        """Draw leanring curve."""
+        x, y = np.array(infos).transpose()
+        
+        # add scatters
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                mode="markers+lines", 
+                marker=dict(opacity=0.3),
+            ),
+            row=2,
+            col=1,
         )
-        pio.write_image(fig, self.save_dir / f"{title}.png")
+        # add average line
+        df = pd.DataFrame({"x": x, "y": y}).groupby(by="x").mean().reset_index()
+        fig.add_trace(
+            go.Scatter(
+                x=df["x"], 
+                y=df["y"], 
+                mode="lines", 
+                line=dict(color="Blue"),
+                showlegend=False,
+            ),
+            row=2, 
+            col=1,
+        )
+        fig.update_xaxes(autorange="reversed", title_text="Temperature", row=2, col=1)
+        fig.update_yaxes(title_text="Potential Energy")
+        return fig
 
     def make_gif(self) -> None:
-        """."""
-        import imageio
-        from PIL import Image
-
+        """Make a .gif file."""
         # List image files
         image_files = list(self.save_dir.iterdir())
         image_files = sorted(image_files, key=lambda x: int(x.stem))
