@@ -1,5 +1,7 @@
 import math
 import random
+import shutil
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -187,7 +189,7 @@ class SimulatedAnnealing:
         init_temp: float = 100.0,
         threshold: float = 0.01,
         cooling_factor: float = 0.95,
-        n_iters: int = 10,
+        n_iters: int = 500,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
@@ -295,7 +297,10 @@ class SimulatedAnnealing:
             width=1800, 
             height=1200,
         )
-        pio.write_image(fig, self.save_dir / f"{title}.png")
+        
+        fpath = self.save_dir / f"{title}.png"
+        pio.write_image(fig, fpath)
+        shutil.copy(src=fpath, dst="optimal.png")
     
     def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
         """Draw contour graph."""
