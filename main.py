@@ -196,7 +196,7 @@ class SimulatedAnnealing:
         init_temp: float = 100.0,
         threshold: float = 0.01,
         cooling_factor: float = 0.95,
-        n_iters: int = 50,
+        n_iters: int = 500,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
@@ -393,7 +393,7 @@ class SimulatedAnnealing:
                 x=x,
                 y=y,
                 mode="markers", 
-                marker=dict(opacity=0.3, color="LightSkyBlue"),
+                marker=dict(opacity=0.2, color="LightSkyBlue"),
                 showlegend=False,
             ),
             row=2,
