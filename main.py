@@ -145,6 +145,13 @@ class ElectricField:
             obj.fixed = True
         self.movable_objs = [obj for obj in self.objs if not obj.fixed]
 
+        # customizing
+        self.objs[0].move_to_(loc=Location(x=-30, y=20))
+        self.objs[1].move_to_(loc=Location(x=-30, y=10))
+        self.objs[2].move_to_(loc=Location(x=-30, y=0))
+        self.objs[3].move_to_(loc=Location(x=-30, y=-10))
+        self.objs[4].move_to_(loc=Location(x=-30, y=-20))
+
         self.charges = []
         for obj in self.objs:
             self.charges += obj.charges
@@ -189,7 +196,7 @@ class SimulatedAnnealing:
         init_temp: float = 100.0,
         threshold: float = 0.01,
         cooling_factor: float = 0.95,
-        n_iters: int = 500,
+        n_iters: int = 50,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
@@ -229,11 +236,16 @@ class SimulatedAnnealing:
         
             print(
                 f"Current Temperature: {cur_temp:.4f}, "
-                f"Potential Energy: {cur_reward:.4f}, "
-                f"Optimum: {opt_reward:.4f}"
+                f"Potential Energy: {cur_reward:.6f}, "
+                f"Optimum: {opt_reward:.6f}"
             )
             cur_temp *= cooling_factor
 
+        self.dump_img(
+            *self.evaluate_electric_field(),
+            infos=infos,
+            title=f"{n_optimized}",
+        )
         self.make_gif()
 
     def is_allowed(
@@ -246,8 +258,13 @@ class SimulatedAnnealing:
         if tmp_reward < cur_reward:
             return True
         
-        delta_e = tmp_reward - cur_reward
-        return random.random() < np.exp(-delta_e / cur_temp)
+        delta_e = (tmp_reward - cur_reward) * 1e5
+        prob = np.exp(-delta_e / cur_temp)
+        # print(
+        #     f"Temp: {cur_temp:.2f}, Cur_R: {cur_reward:.6f}, "
+        #     f"Tmp_R: {tmp_reward:.6f}, Prob: {prob}"
+        # )
+        return random.random() < prob
 
     def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
         """Return field and entropy."""
@@ -293,7 +310,7 @@ class SimulatedAnnealing:
         fig = self.make_learning_curve(fig, infos)
 
         fig.update_layout(
-            title_text=f"# of improved: {title}, Potential energy: {reward:.4f}", 
+            title_text=f"# of improved: {title}, Potential energy: {reward:.6f}", 
             width=1800, 
             height=1200,
         )
@@ -376,7 +393,7 @@ class SimulatedAnnealing:
                 x=x,
                 y=y,
                 mode="markers", 
-                marker=dict(opacity=0.7, color="LightSkyBlue"),
+                marker=dict(opacity=0.3, color="LightSkyBlue"),
                 showlegend=False,
             ),
             row=2,
