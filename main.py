@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 FIELD_WIDTH = FIELD_HEIGHT = 100
-N_OBJECTS = 30
+N_OBJECTS = 50
 N_FIXED = 5
 
 N_ROWS = N_COLS = 100
@@ -115,7 +115,7 @@ class Rectangle:
             x1=(self.top_right.x / FIELD_WIDTH + 0.5) * N_COLS,
             y0=(self.bottom_left.y / FIELD_HEIGHT + 0.5) * N_ROWS,
             y1=(self.top_right.y / FIELD_HEIGHT + 0.5) * N_ROWS,
-            line=dict(color="Gray" if self.fixed else "RoyalBlue"),
+            line=dict(color="Black" if self.fixed else "RoyalBlue"),
             fillcolor="LightGray" if self.fixed else "LightSkyBlue",
             opacity=0.8 if self.fixed else 0.5,
         )
@@ -185,8 +185,8 @@ class SimulatedAnnealing:
     def run(
         self,
         init_temp: float = 100.0,
-        threshold: float = 1.0,
-        cooling_factor: float = 0.2,
+        threshold: float = 0.01,
+        cooling_factor: float = 0.95,
         n_iters: int = 10,
     ) -> None:
         """Optimize electric field."""
@@ -194,7 +194,7 @@ class SimulatedAnnealing:
         infos, n_optimized = [(init_temp, init_reward)], 1
         self.dump_img(init_field, init_reward, infos, title="0")
 
-        cur_temp, cur_reward = init_temp, init_reward
+        cur_temp, cur_reward, opt_reward = init_temp, init_reward, init_reward
         while cur_temp > threshold:
             for _ in range(n_iters):
                 obj = random.choice(self.electric_field.movable_objs)   
@@ -210,20 +210,42 @@ class SimulatedAnnealing:
                 _, tmp_reward = self.evaluate_electric_field()
                 infos.append((cur_temp, tmp_reward))
 
-                if tmp_reward >= cur_reward:
-                    obj.move_to_(ori_loc)
-                else:
+                if self.is_allowed(cur_temp, cur_reward, tmp_reward):
                     cur_reward = tmp_reward                    
-                    self.dump_img(
-                        *self.evaluate_electric_field(), 
-                        infos=infos,
-                        title=f"{n_optimized}"
-                    )
+
+                    # update the best !
+                    if tmp_reward < opt_reward:   
+                        opt_reward = tmp_reward 
+                        self.dump_img(
+                            *self.evaluate_electric_field(), 
+                            infos=infos,
+                            title=f"{n_optimized}"
+                        )
+                        n_optimized += 1
+                else:
+                    obj.move_to_(ori_loc)
         
-            print(f"Current Temperature: {cur_temp:.4f}, Potential Energy: {cur_reward:.4f}")
+            print(
+                f"Current Temperature: {cur_temp:.4f}, "
+                f"Potential Energy: {cur_reward:.4f}, "
+                f"Optimum: {opt_reward:.4f}"
+            )
             cur_temp *= cooling_factor
 
         self.make_gif()
+
+    def is_allowed(
+        self,
+        cur_temp: float,
+        cur_reward: float,
+        tmp_reward: float,
+    ) -> bool:
+        """Determine whether the current change is allowed."""
+        if tmp_reward < cur_reward:
+            return True
+        
+        delta_e = tmp_reward - cur_reward
+        return random.random() < np.exp(-delta_e / cur_temp)
 
     def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
         """Return field and entropy."""
@@ -252,7 +274,7 @@ class SimulatedAnnealing:
             horizontal_spacing=0.04,
             vertical_spacing=0.1,
             subplot_titles=[
-                "2D Contour Graph",  # (1, 1)
+                "2D Placement",  # (1, 1)
                 "3D Contour Grpah",  # (1, 2)
                 "Learning Curve",  # (2, 1-2)
             ],
@@ -269,12 +291,11 @@ class SimulatedAnnealing:
         fig = self.make_learning_curve(fig, infos)
 
         fig.update_layout(
-            title_text=f"# of epochs: {title}, Entropy: {reward:.4f}", 
+            title_text=f"# of improved: {title}, Potential energy: {reward:.4f}", 
             width=1800, 
             height=1200,
         )
         pio.write_image(fig, self.save_dir / f"{title}.png")
-        exit()
     
     def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
         """Draw contour graph."""
@@ -302,7 +323,7 @@ class SimulatedAnnealing:
             for c in charges
         ]
         c_y, c_x = np.array(c_locs).transpose()
-        c_labels = [f"{c.size * 100:.0f}" for c in charges]
+        c_labels = [f"{c.size:.1f}" for c in charges]
         fig.add_trace(
             go.Scatter(
                 x=c_x, 
@@ -312,6 +333,7 @@ class SimulatedAnnealing:
                 marker=dict(color="black"),
                 textposition="top right",
                 textfont=dict(color="white"),
+                showlegend=False,
             ),
             row=1,
             col=1,
@@ -348,8 +370,9 @@ class SimulatedAnnealing:
             go.Scatter(
                 x=x,
                 y=y,
-                mode="markers+lines", 
-                marker=dict(opacity=0.3),
+                mode="markers", 
+                marker=dict(opacity=0.7, color="LightSkyBlue"),
+                showlegend=False,
             ),
             row=2,
             col=1,
@@ -361,14 +384,21 @@ class SimulatedAnnealing:
                 x=df["x"], 
                 y=df["y"], 
                 mode="lines", 
-                line=dict(color="Blue"),
+                line=dict(color="SkyBlue"),
                 showlegend=False,
             ),
             row=2, 
             col=1,
         )
-        fig.update_xaxes(autorange="reversed", title_text="Temperature", row=2, col=1)
-        fig.update_yaxes(title_text="Potential Energy")
+
+        fig.update_xaxes(
+            autorange="reversed", 
+            type="log",
+            title_text="Temperature", 
+            row=2, 
+            col=1,
+        )
+        fig.update_yaxes(title_text="Potential Energy", row=2, col=1)
         return fig
 
     def make_gif(self) -> None:
