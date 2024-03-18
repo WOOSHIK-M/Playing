@@ -19,6 +19,12 @@ N_FIXED = 5
 
 N_ROWS = N_COLS = 100
 
+SAVE_DIR = "save"
+TICKER = "debug"
+
+SAVE_DIR += f"_TICKER"
+
+
 class Location:
     """Basic location class."""
 
@@ -136,6 +142,8 @@ class ElectricField:
 
     def __init__(self) -> None:
         """Initialize."""
+        self.bin_width, self.bin_height = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
+
         # make objects to be optimized
         self.objs = [
             Rectangle(
@@ -151,18 +159,7 @@ class ElectricField:
         self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
         for obj in self.objs[:N_FIXED]:
             obj.fixed = True
-        
-        # add boundary charges
-        self.objs += [
-            # top
-            Rectangle(x=0.0, y=FIELD_HEIGHT / 2, width=FIELD_WIDTH, height=3, fixed=True),
-            # bottom
-            Rectangle(x=0.0, y=-FIELD_HEIGHT / 2, width=FIELD_WIDTH, height=3, fixed=True),
-            # left
-            Rectangle(x=-FIELD_WIDTH / 2, y=0.0, width=3, height=FIELD_HEIGHT, fixed=True),
-            # right
-            Rectangle(x=FIELD_WIDTH / 2, y=0.0, width=3, height=FIELD_HEIGHT, fixed=True),
-        ]
+        self._add_boundary_charges(b_charge_width=3, b_charge_height=3)
             
         # get movable objects
         self.movable_objs = [obj for obj in self.objs if not obj.fixed]
@@ -178,7 +175,6 @@ class ElectricField:
         for obj in self.objs:
             self.charges += obj.charges
     
-        self.bin_width, self.bin_height = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
 
     @property
     def potential_field(self) -> np.ndarray:
@@ -201,6 +197,53 @@ class ElectricField:
             x=(col_idx + 0.5) * self.bin_width - FIELD_WIDTH / 2, 
             y=(row_idx + 0.5) * self.bin_height - FIELD_HEIGHT / 2,
         )
+    
+    def _add_boundary_charges(self, b_charge_width: float, b_charge_height: float) -> None:
+        """Add boundary objects."""
+        # top
+        self.objs += [
+            Rectangle(
+                x=x_coord - FIELD_WIDTH / 2 + FIELD_WIDTH % b_charge_width - 1,
+                y=FIELD_HEIGHT / 2,
+                width=b_charge_width,
+                height=1,
+                fixed=True
+            )
+            for x_coord in range(0, FIELD_WIDTH, b_charge_width)
+        ]
+        # bottom
+        self.objs += [
+            Rectangle(
+                x=x_coord - FIELD_WIDTH / 2 + FIELD_WIDTH % b_charge_width - 1,
+                y=-FIELD_HEIGHT / 2,
+                width=b_charge_width,
+                height=1,
+                fixed=True
+            )
+            for x_coord in range(0, FIELD_WIDTH, b_charge_width)
+        ]
+        # left
+        self.objs += [
+            Rectangle(
+                x=-FIELD_WIDTH / 2,
+                y=y_coord - FIELD_HEIGHT / 2 + FIELD_HEIGHT % b_charge_height - 1,
+                width=1,
+                height=b_charge_height,
+                fixed=True
+            )
+            for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
+        ]
+        # right
+        self.objs += [
+            Rectangle(
+                x=FIELD_WIDTH / 2,
+                y=y_coord - FIELD_HEIGHT / 2 + FIELD_HEIGHT % b_charge_height - 1,
+                width=1,
+                height=b_charge_height,
+                fixed=True
+            )
+            for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
+        ]
 
 
 class SimulatedAnnealing:
@@ -210,7 +253,7 @@ class SimulatedAnnealing:
         """Initialize."""
         self.electric_field = ElectricField()
 
-        self.save_dir = Path("save")
+        self.save_dir = Path(SAVE_DIR)
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
     def run(
@@ -339,7 +382,7 @@ class SimulatedAnnealing:
         
         fpath = self.save_dir / f"{title}.png"
         pio.write_image(fig, fpath)
-        shutil.copy(src=fpath, dst="optimal.png")
+        shutil.copy(src=fpath, dst=f"optimal{TICKER}.png")
     
     def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
         """Draw contour graph."""
@@ -453,7 +496,7 @@ class SimulatedAnnealing:
         images = [Image.open(x) for x in image_files]
         
         im = images[0]
-        im.save('result.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
+        im.save(f'result{TICKER}.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
         print("Done")
 
 SimulatedAnnealing().run()
