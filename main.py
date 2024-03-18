@@ -80,14 +80,21 @@ class Charge:
 class Rectangle:
     """A basic rectangle class."""
 
-    def __init__(self, x: float, y: float, width: float, height: float) -> None:
+    def __init__(
+        self, 
+        x: float, 
+        y: float, 
+        width: float, 
+        height: float, 
+        fixed: bool = False,
+    ) -> None:
         """Initialize."""
         self.center = Location(x=x, y=y)
         self.width = width
         self.height = height
         
         self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
-        self.fixed = False
+        self.fixed = fixed
 
     @property
     def size(self) -> float:
@@ -129,6 +136,7 @@ class ElectricField:
 
     def __init__(self) -> None:
         """Initialize."""
+        # make objects to be optimized
         self.objs = [
             Rectangle(
                 # x=-FIELD_WIDTH / 2, y=-FIELD_HEIGHT / 2,
@@ -143,6 +151,20 @@ class ElectricField:
         self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
         for obj in self.objs[:N_FIXED]:
             obj.fixed = True
+        
+        # add boundary charges
+        self.objs += [
+            # top
+            Rectangle(x=0.0, y=FIELD_HEIGHT / 2, width=FIELD_WIDTH, height=3, fixed=True),
+            # bottom
+            Rectangle(x=0.0, y=-FIELD_HEIGHT / 2, width=FIELD_WIDTH, height=3, fixed=True),
+            # left
+            Rectangle(x=-FIELD_WIDTH / 2, y=0.0, width=3, height=FIELD_HEIGHT, fixed=True),
+            # right
+            Rectangle(x=FIELD_WIDTH / 2, y=0.0, width=3, height=FIELD_HEIGHT, fixed=True),
+        ]
+            
+        # get movable objects
         self.movable_objs = [obj for obj in self.objs if not obj.fixed]
 
         # customizing
