@@ -194,9 +194,9 @@ class SimulatedAnnealing:
     def run(
         self,
         init_temp: float = 100.0,
-        threshold: float = 0.01,
+        threshold: float = 1.0,
         cooling_factor: float = 0.95,
-        n_iters: int = 500,
+        n_iters: int = 1000,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
@@ -217,9 +217,9 @@ class SimulatedAnnealing:
                 )
 
                 _, tmp_reward = self.evaluate_electric_field()
-                infos.append((cur_temp, tmp_reward))
 
                 if self.is_allowed(cur_temp, cur_reward, tmp_reward):
+                    infos.append((cur_temp, tmp_reward))
                     cur_reward = tmp_reward                    
 
                     # update the best !
