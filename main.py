@@ -20,9 +20,9 @@ N_FIXED = 5
 N_ROWS = N_COLS = 100
 
 SAVE_DIR = "save"
-TICKER = "debug"
+TICKER = ""
 
-SAVE_DIR += f"_TICKER"
+SAVE_DIR += f"_{TICKER}"
 
 
 class Location:
@@ -382,7 +382,7 @@ class SimulatedAnnealing:
         
         fpath = self.save_dir / f"{title}.png"
         pio.write_image(fig, fpath)
-        shutil.copy(src=fpath, dst=f"optimal{TICKER}.png")
+        shutil.copy(src=fpath, dst=f"optimal_{TICKER}.png")
     
     def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
         """Draw contour graph."""
@@ -496,7 +496,7 @@ class SimulatedAnnealing:
         images = [Image.open(x) for x in image_files]
         
         im = images[0]
-        im.save(f'result{TICKER}.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
+        im.save(f'result_{TICKER}.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
         print("Done")
 
 SimulatedAnnealing().run()
