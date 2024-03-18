@@ -20,10 +20,10 @@ N_FIXED = 5
 N_ROWS = N_COLS = 100
 
 SAVE_DIR = "save"
-TICKER = "discretized_action"
+TICKER = "no_overlap"
 
 SAVE_DIR += f"_{TICKER}"
-
+BIN_WIDTH, BIN_HEIGHT = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
 
 class Location:
     """Basic location class."""
@@ -74,6 +74,10 @@ class Charge:
         """Compute potential energy from a charge at loc."""
         force_x = force_y = 0.0
         for c in charges:
+            # # a charge belongs to its bin, no computation
+            # if abs(loc.x - c.loc.x) < BIN_WIDTH / 2 and abs(loc.y - c.loc.y) < BIN_HEIGHT / 2:
+            #     continue
+
             theta = math.atan2(loc.y - c.loc.y, loc.x - c.loc.x)
             r = math.sqrt((loc.x - c.loc.x) ** 2 + (loc.y - c.loc.y) ** 2)
             if not r:
@@ -96,19 +100,33 @@ class Rectangle:
 
     def __init__(
         self, 
+        name: str,
         x: float, 
         y: float, 
         width: float, 
-        height: float, 
+        height: float,
         fixed: bool = False,
+        is_boundary: bool = False,
     ) -> None:
         """Initialize."""
+        self.name = name
+
         self.center = Location(x=x, y=y)
         self.width = width
         self.height = height
         
         self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
         self.fixed = fixed
+        self.is_boundary = is_boundary
+
+    @staticmethod
+    def intersect_between(rect_i: "Rectangle", rect_j: "Rectangle") -> bool:
+        """Check if two rectangles are intersectd."""
+        if rect_i.bottom_left.x > rect_j.top_right.x or rect_i.top_right.x < rect_j.bottom_left.x:
+            return False
+        if rect_i.bottom_left.y > rect_j.top_right.y or rect_i.top_right.y < rect_j.bottom_left.y:
+            return False
+        return True
 
     @property
     def size(self) -> float:
@@ -150,11 +168,10 @@ class ElectricField:
 
     def __init__(self) -> None:
         """Initialize."""
-        self.bin_width, self.bin_height = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
-
         # make objects to be optimized
         self.objs = [
             Rectangle(
+                name=str(_),
                 # x=-FIELD_WIDTH / 2, y=-FIELD_HEIGHT / 2,
                 # x=0.0, y=0.0,
                 x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
@@ -202,8 +219,8 @@ class ElectricField:
         """Compute a location of the center of bin."""
         row_idx, col_idx = divmod(idx, N_COLS)    
         return Location(
-            x=(col_idx + 0.5) * self.bin_width - FIELD_WIDTH / 2, 
-            y=(row_idx + 0.5) * self.bin_height - FIELD_HEIGHT / 2,
+            x=(col_idx + 0.5) * BIN_WIDTH - FIELD_WIDTH / 2, 
+            y=(row_idx + 0.5) * BIN_HEIGHT - FIELD_HEIGHT / 2,
         )
     
     def _add_boundary_charges(self, b_charge_width: float, b_charge_height: float) -> None:
@@ -211,44 +228,52 @@ class ElectricField:
         # top
         self.objs += [
             Rectangle(
+                name="boundary_top",
                 x=x_coord - FIELD_WIDTH / 2 + FIELD_WIDTH % b_charge_width - 1,
                 y=FIELD_HEIGHT / 2,
                 width=b_charge_width,
                 height=1,
-                fixed=True
+                fixed=True,
+                is_boundary=True,
             )
             for x_coord in range(0, FIELD_WIDTH, b_charge_width)
         ]
         # bottom
         self.objs += [
             Rectangle(
+                name="boundary_bottom",
                 x=x_coord - FIELD_WIDTH / 2 + FIELD_WIDTH % b_charge_width - 1,
                 y=-FIELD_HEIGHT / 2,
                 width=b_charge_width,
                 height=1,
-                fixed=True
+                fixed=True,
+                is_boundary=True,
             )
             for x_coord in range(0, FIELD_WIDTH, b_charge_width)
         ]
         # left
         self.objs += [
             Rectangle(
+                name="boundary_left",
                 x=-FIELD_WIDTH / 2,
                 y=y_coord - FIELD_HEIGHT / 2 + FIELD_HEIGHT % b_charge_height - 1,
                 width=1,
                 height=b_charge_height,
-                fixed=True
+                fixed=True,
+                is_boundary=True,
             )
             for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
         ]
         # right
         self.objs += [
             Rectangle(
+                name="boundary_right",
                 x=FIELD_WIDTH / 2,
                 y=y_coord - FIELD_HEIGHT / 2 + FIELD_HEIGHT % b_charge_height - 1,
                 width=1,
                 height=b_charge_height,
-                fixed=True
+                fixed=True,
+                is_boundary=True,
             )
             for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
         ]
@@ -261,10 +286,14 @@ class SimulatedAnnealing:
         """Initialize."""
         self.electric_field = ElectricField()
 
-        self.available_actions = [(row, col) for row in range(N_ROWS) for col in range(N_COLS)]
-
         self.save_dir = Path(SAVE_DIR)
         self.save_dir.mkdir(exist_ok=True, parents=True)
+
+        # resolve overlapping first
+        for obj in self.electric_field.objs:
+            if obj.fixed:
+                continue
+            self._move_to_non_overlapped(obj)
 
     def run(
         self,
@@ -284,9 +313,7 @@ class SimulatedAnnealing:
                 obj = random.choice(self.electric_field.movable_objs)   
                 
                 ori_loc = obj.center
-                
-                action = random.choice(self.available_actions)
-                obj.move_to_(Location.discrete_to_continous(action))
+                obj.move_to_(self._move_to_non_overlapped(obj))
 
                 _, tmp_reward = self.evaluate_electric_field()
 
@@ -319,6 +346,28 @@ class SimulatedAnnealing:
             title=f"{n_optimized}",
         )
         self.make_gif()
+    
+    def  _move_to_non_overlapped(self, obj: Rectangle) -> Location:
+        """."""
+        non_boundaries = [
+            tg_obj
+            for tg_obj in self.electric_field.objs 
+            if not tg_obj.is_boundary and tg_obj.name != obj.name
+        ]
+
+        available_x = (obj.width - FIELD_WIDTH)
+        available_y = (obj.height - FIELD_HEIGHT)
+
+        while True:
+            x = random.random() * available_x - available_x / 2
+            y = random.random() * available_y - available_y / 2
+            
+            obj.move_to_(Location(x=x, y=y))
+            if not any(
+                Rectangle.intersect_between(rect_i=obj, rect_j=tg_obj) for tg_obj in non_boundaries
+            ): 
+                break
+        return Location(x=x, y=y)
 
     def is_allowed(
         self,
@@ -417,12 +466,13 @@ class SimulatedAnnealing:
             for c in charges
         ]
         c_y, c_x = np.array(c_locs).transpose()
-        c_labels = [f"{c.size:.1f}" for c in charges]
+        # text_labels = [f"{c.size:.1f}" for c in charges]
+        text_labels = [o.name for o in objs]
         fig.add_trace(
             go.Scatter(
                 x=c_x, 
                 y=c_y,
-                text=c_labels,
+                text=text_labels,
                 mode="markers+text",
                 marker=dict(color="black"),
                 textposition="top right",
@@ -457,6 +507,9 @@ class SimulatedAnnealing:
 
     def make_learning_curve(self, fig: go.Figure, infos: list[float]) -> go.Figure:
         """Draw leanring curve."""
+        if not infos:
+            return fig
+
         x, y = np.array(infos).transpose()
         
         # add scatters
