@@ -20,7 +20,7 @@ N_FIXED = 5
 N_ROWS = N_COLS = 100
 
 SAVE_DIR = "save"
-TICKER = "test"
+TICKER = "discretized_action"
 
 SAVE_DIR += f"_{TICKER}"
 
