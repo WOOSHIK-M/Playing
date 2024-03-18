@@ -20,7 +20,7 @@ N_FIXED = 5
 N_ROWS = N_COLS = 100
 
 SAVE_DIR = "save"
-TICKER = ""
+TICKER = "test"
 
 SAVE_DIR += f"_{TICKER}"
 
@@ -47,6 +47,14 @@ class Location:
             row_idx = np.floor(row_idx).astype(np.int64)
             col_idx = np.floor(col_idx).astype(np.int64)
         return row_idx, col_idx
+
+    @staticmethod
+    def discrete_to_continous(loc: tuple[int, int]) -> "Location":
+        """Convert discrete action to continuous coordinates."""
+        return Location(
+            x=(loc[1] + 0.5) * (FIELD_WIDTH / N_COLS) - FIELD_WIDTH / 2,
+            y=(loc[0] + 0.5) * (FIELD_HEIGHT / N_ROWS) - FIELD_HEIGHT / 2,
+        )
 
 
 class Charge:
@@ -253,6 +261,8 @@ class SimulatedAnnealing:
         """Initialize."""
         self.electric_field = ElectricField()
 
+        self.available_actions = [(row, col) for row in range(N_ROWS) for col in range(N_COLS)]
+
         self.save_dir = Path(SAVE_DIR)
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
@@ -274,12 +284,9 @@ class SimulatedAnnealing:
                 obj = random.choice(self.electric_field.movable_objs)   
                 
                 ori_loc = obj.center
-                obj.move_to_(
-                    Location(
-                        x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
-                        y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
-                    )
-                )
+                
+                action = random.choice(self.available_actions)
+                obj.move_to_(Location.discrete_to_continous(action))
 
                 _, tmp_reward = self.evaluate_electric_field()
 
