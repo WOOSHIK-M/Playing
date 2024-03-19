@@ -13,14 +13,14 @@ from PIL import Image
 from pathlib import Path
 
 
-FIELD_WIDTH = FIELD_HEIGHT = 100
-N_OBJECTS = 50
-N_FIXED = 5
-
-N_ROWS = N_COLS = 100
+# 6301 setting
+FIELD_WIDTH = 105.3
+FIELD_HEIGHT = 62.30000074101214
+N_ROWS = 100
+N_COLS = int(N_ROWS * FIELD_WIDTH / FIELD_HEIGHT + 1)
 
 SAVE_DIR = "save"
-TICKER = "no_overlap"
+TICKER = "copycat"
 
 SAVE_DIR += f"_{TICKER}"
 BIN_WIDTH, BIN_HEIGHT = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
@@ -74,9 +74,9 @@ class Charge:
         """Compute potential energy from a charge at loc."""
         force_x = force_y = 0.0
         for c in charges:
-            # # a charge belongs to its bin, no computation
-            # if abs(loc.x - c.loc.x) < BIN_WIDTH / 2 and abs(loc.y - c.loc.y) < BIN_HEIGHT / 2:
-            #     continue
+            # a charge belongs to its bin, no computation
+            if abs(loc.x - c.loc.x) < BIN_WIDTH / 2 and abs(loc.y - c.loc.y) < BIN_HEIGHT / 2:
+                continue
 
             theta = math.atan2(loc.y - c.loc.y, loc.x - c.loc.x)
             r = math.sqrt((loc.x - c.loc.x) ** 2 + (loc.y - c.loc.y) ** 2)
@@ -168,38 +168,30 @@ class ElectricField:
 
     def __init__(self) -> None:
         """Initialize."""
-        # make objects to be optimized
+        
+        import pandas as pd
+        
+        df = pd.read_csv("data/expert.csv")
         self.objs = [
             Rectangle(
-                name=str(_),
-                # x=-FIELD_WIDTH / 2, y=-FIELD_HEIGHT / 2,
-                # x=0.0, y=0.0,
-                x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
-                y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
-                width=random.random() * 10 + 1,
-                height=random.random() * 10 + 1,
+                name=row["Name"],
+                x=row["left"] + row["width"] / 2 - FIELD_WIDTH / 2,
+                y=row["top"] + row["height"] / 2 - FIELD_HEIGHT / 2,
+                width=row["width"],
+                height=row["height"],
+                fixed=row["Fixed"],
             )
-            for _ in range(N_OBJECTS)
+            for row in df.iloc
+            if row["PlacedLayer"] == "TOP"
         ]
-        self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
-        for obj in self.objs[:N_FIXED]:
-            obj.fixed = True
-        self._add_boundary_charges(b_charge_width=3, b_charge_height=3)
+        self._add_boundary_charges(b_charge_width=5, b_charge_height=5)
             
         # get movable objects
         self.movable_objs = [obj for obj in self.objs if not obj.fixed]
 
-        # customizing
-        self.objs[0].move_to_(loc=Location(x=-30, y=20))
-        self.objs[1].move_to_(loc=Location(x=-30, y=10))
-        self.objs[2].move_to_(loc=Location(x=-30, y=0))
-        self.objs[3].move_to_(loc=Location(x=-30, y=-10))
-        self.objs[4].move_to_(loc=Location(x=-30, y=-20))
-
         self.charges = []
         for obj in self.objs:
             self.charges += obj.charges
-    
 
     @property
     def potential_field(self) -> np.ndarray:
@@ -236,7 +228,7 @@ class ElectricField:
                 fixed=True,
                 is_boundary=True,
             )
-            for x_coord in range(0, FIELD_WIDTH, b_charge_width)
+            for x_coord in range(0, np.round(FIELD_WIDTH + b_charge_width).astype(np.int64), b_charge_width)
         ]
         # bottom
         self.objs += [
@@ -249,7 +241,7 @@ class ElectricField:
                 fixed=True,
                 is_boundary=True,
             )
-            for x_coord in range(0, FIELD_WIDTH, b_charge_width)
+            for x_coord in range(0, np.round(FIELD_WIDTH + b_charge_width).astype(np.int64), b_charge_width)
         ]
         # left
         self.objs += [
@@ -262,7 +254,7 @@ class ElectricField:
                 fixed=True,
                 is_boundary=True,
             )
-            for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
+            for y_coord in range(0, np.round(FIELD_HEIGHT + b_charge_height).astype(np.int64), b_charge_height)
         ]
         # right
         self.objs += [
@@ -275,7 +267,7 @@ class ElectricField:
                 fixed=True,
                 is_boundary=True,
             )
-            for y_coord in range(0, FIELD_HEIGHT, b_charge_height)
+            for y_coord in range(0, np.round(FIELD_HEIGHT + b_charge_height).astype(np.int64), b_charge_height)
         ]
 
 
@@ -290,17 +282,17 @@ class SimulatedAnnealing:
         self.save_dir.mkdir(exist_ok=True, parents=True)
 
         # resolve overlapping first
-        for obj in self.electric_field.objs:
-            if obj.fixed:
-                continue
-            self._move_to_non_overlapped(obj)
+        # for obj in self.electric_field.objs:
+        #     if obj.fixed:
+        #         continue
+        #     self._move_to_non_overlapped(obj)
 
     def run(
         self,
         init_temp: float = 100.0,
-        threshold: float = 1.0,
+        threshold: float = 5.0,
         cooling_factor: float = 0.95,
-        n_iters: int = 1000,
+        n_iters: int = 500,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
@@ -432,8 +424,8 @@ class SimulatedAnnealing:
 
         fig.update_layout(
             title_text=f"# of improved: {title}, Potential energy: {reward:.6f}", 
-            width=1800, 
-            height=1200,
+            width=2400, 
+            height=1600,
         )
         
         fpath = self.save_dir / f"{title}.png"
@@ -466,8 +458,7 @@ class SimulatedAnnealing:
             for c in charges
         ]
         c_y, c_x = np.array(c_locs).transpose()
-        # text_labels = [f"{c.size:.1f}" for c in charges]
-        text_labels = [o.name for o in objs]
+        text_labels = ["" if o.is_boundary else f"{o.name}" for o in objs]
         fig.add_trace(
             go.Scatter(
                 x=c_x, 
