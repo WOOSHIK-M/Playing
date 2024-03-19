@@ -19,10 +19,6 @@ FIELD_HEIGHT = 62.30000074101214
 N_ROWS = 100
 N_COLS = int(N_ROWS * FIELD_WIDTH / FIELD_HEIGHT + 1)
 
-SAVE_DIR = "save"
-TICKER = "copycat"
-
-SAVE_DIR += f"_{TICKER}"
 BIN_WIDTH, BIN_HEIGHT = FIELD_WIDTH / N_COLS, FIELD_WIDTH / N_ROWS
 
 class Location:
@@ -105,6 +101,7 @@ class Rectangle:
         y: float, 
         width: float, 
         height: float,
+        charges: list[str] = None,
         fixed: bool = False,
         is_boundary: bool = False,
     ) -> None:
@@ -114,8 +111,21 @@ class Rectangle:
         self.center = Location(x=x, y=y)
         self.width = width
         self.height = height
-        
-        self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
+
+        if charges:
+            self.charges = [
+                Charge(
+                    loc=Location(
+                        x=cx - FIELD_WIDTH / 2,
+                        y=cy - FIELD_HEIGHT / 2,
+                    ),
+                    size=1,
+                )
+                for cx, cy in map(eval, charges)
+            ]
+        else:
+            self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
+
         self.fixed = fixed
         self.is_boundary = is_boundary
 
@@ -166,12 +176,12 @@ class Rectangle:
 class ElectricField:
     """A electric field class."""
 
-    def __init__(self) -> None:
+    def __init__(self, df_path: str) -> None:
         """Initialize."""
         
         import pandas as pd
         
-        df = pd.read_csv("data/expert.csv")
+        df = pd.read_csv(df_path)
         self.objs = [
             Rectangle(
                 name=row["Name"],
@@ -180,6 +190,7 @@ class ElectricField:
                 width=row["width"],
                 height=row["height"],
                 fixed=row["Fixed"],
+                charges=eval(row["pins"]),
             )
             for row in df.iloc
             if row["PlacedLayer"] == "TOP"
@@ -274,12 +285,18 @@ class ElectricField:
 class SimulatedAnnealing:
     """Do SA."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        df_path: str = "data/expert.csv",
+        save_dir: str = "save",
+        ticker: str = "",
+    ) -> None:
         """Initialize."""
-        self.electric_field = ElectricField()
+        self.electric_field = ElectricField(df_path)
 
-        self.save_dir = Path(SAVE_DIR)
+        self.save_dir = Path(f"{save_dir}_{ticker}")
         self.save_dir.mkdir(exist_ok=True, parents=True)
+        self.ticker = ticker
 
         # resolve overlapping first
         # for obj in self.electric_field.objs:
@@ -430,7 +447,7 @@ class SimulatedAnnealing:
         
         fpath = self.save_dir / f"{title}.png"
         pio.write_image(fig, fpath)
-        shutil.copy(src=fpath, dst=f"optimal_{TICKER}.png")
+        shutil.copy(src=fpath, dst=f"optimal_{self.ticker}.png")
     
     def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
         """Draw contour graph."""
@@ -547,7 +564,7 @@ class SimulatedAnnealing:
         images = [Image.open(x) for x in image_files]
         
         im = images[0]
-        im.save(f'result_{TICKER}.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
+        im.save(f'result_{self.ticker}.gif', save_all=True, append_images=images[1:],loop=0xff, duration=300)
         print("Done")
 
 SimulatedAnnealing().run()
