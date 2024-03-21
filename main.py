@@ -1,3 +1,4 @@
+import copy
 import math
 import random
 import shutil
@@ -9,15 +10,17 @@ import plotly.io as pio
 
 from scipy.stats import entropy
 from scipy.ndimage import gaussian_filter
+from scipy.special import softmax
 
 from plotly.subplots import make_subplots
 from PIL import Image
 from pathlib import Path
 
 # 6301 setting
-FIELD_WIDTH = 105.3
-FIELD_HEIGHT = 62.30000074101214
- 
+# FIELD_WIDTH = 105.3
+# FIELD_HEIGHT = 62.30000074101214
+FIELD_WIDTH = FIELD_HEIGHT = 100
+
 N_ROWS = 100
 N_COLS = int(N_ROWS * FIELD_WIDTH / FIELD_HEIGHT + 1)
 
@@ -30,17 +33,10 @@ class Location:
         """Initialize."""
         self.x, self.y = x, y
 
-    def get_idx(
-        self, 
-        n_rows: int,
-        n_cols: int,
-        width: float,
-        height: float,
-        match_to_bin: bool = True,
-    ) -> tuple[int]:
+    def get_idx(self, match_to_bin: bool = True) -> tuple[int]:
         """Get bin inidcies."""
-        row_idx = ((self.y + height / 2) / height * n_rows)
-        col_idx = ((self.x + width / 2) / width * n_cols)
+        row_idx = ((self.y + FIELD_HEIGHT / 2) / FIELD_HEIGHT * N_ROWS)
+        col_idx = ((self.x + FIELD_WIDTH / 2) / FIELD_WIDTH * N_COLS)
         if match_to_bin:
             row_idx = np.floor(row_idx).astype(np.int64)
             col_idx = np.floor(col_idx).astype(np.int64)
@@ -75,13 +71,19 @@ class Charge:
         """Compute potential energy from a charge at loc."""
         force_x = force_y = 0.0
         for c in charges:
-            theta = math.atan2(loc.y - c.loc.y, loc.x - c.loc.x)
-            r = math.sqrt((loc.x - c.loc.x) ** 2 + (loc.y - c.loc.y) ** 2)
+            x_distance = max(BIN_WIDTH, abs(loc.x - c.loc.x))
+            y_distance = max(BIN_HEIGHT, abs(loc.y - c.loc.y))
+            # if x_distance < BIN_WIDTH / 2 and y_distance < BIN_HEIGHT / 2:
+            #     continue
+
+            r = math.sqrt(x_distance ** 2 + y_distance ** 2)
 
             # V = kQ/r
-            force = c.size / max(r, 1.0)
+            force = c.size / math.sqrt((r + 1.0))
+            theta = math.atan2(loc.y - c.loc.y, loc.x - c.loc.x)
             force_x += force * math.cos(theta) if c.loc.x != loc.x else 0.0
             force_y += force * math.sin(theta) if c.loc.y != loc.y else 0.0
+        
         return math.sqrt(force_x ** 2 + force_y ** 2)
 
     def __repr__(self) -> str:
@@ -207,16 +209,18 @@ class ElectricField:
                     # x=0.0, y=0.0,
                     x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
                     y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
-                    width=random.random() * 4 + 4,
-                    height=random.random() * 4 + 4,
+                    width=10,
+                    height=10,
+                    # width=random.random() * 4 + 4,
+                    # height=random.random() * 4 + 4,
                 )
-                for _ in range(12)
+                for _ in range(4)
             ]
             # self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
-            for obj in self.objs[:6]:
-                obj.fixed = True
+            # for obj in self.objs[:6]:
+            #     obj.fixed = True
 
-        self._add_boundary_charges(width=10, height=10)
+        self._add_boundary_charges(width=3, height=3)
             
         # get movable objects
         self.movable_objs = [obj for obj in self.objs if not obj.fixed]
@@ -237,7 +241,7 @@ class ElectricField:
 
         # electric potential
         field = gaussian_filter(field, sigma=2)
-        field /= field.max()
+        field = softmax(np.log(field + 1.0))
         return field
 
     def compute_bin_location(self, idx: int) -> Location:
@@ -250,7 +254,7 @@ class ElectricField:
     
     def _add_boundary_charges(self, width: float, height: float) -> None:
         """Add boundary objects."""
-        default_size = 1
+        default_size = 1.0
 
         # top
         nc = max(math.floor(FIELD_WIDTH / width), 1)
@@ -321,9 +325,9 @@ class SimulatedAnnealing:
         self.electric_field = ElectricField(df_path)
 
         # random init
-        for obj in self.electric_field.objs:
-            if not obj.fixed:
-                self._move_to_non_overlapped(obj)
+        # for obj in self.electric_field.objs:
+        #     if not obj.fixed:
+        #         self._move_to_non_overlapped(obj)
 
         self.save_dir = Path(f"{save_dir}_{ticker}")
         self.save_dir.mkdir(exist_ok=True, parents=True)
@@ -331,33 +335,44 @@ class SimulatedAnnealing:
 
         # resolve overlapping first
         if not df_path:
-            self.electric_field.objs[0].move_to_(loc=Location(x=-30, y=20))
-            self.electric_field.objs[1].move_to_(loc=Location(x=-30, y=12))
-            self.electric_field.objs[2].move_to_(loc=Location(x=-30, y=4))
-            self.electric_field.objs[3].move_to_(loc=Location(x=-30, y=-4))
-            self.electric_field.objs[4].move_to_(loc=Location(x=-30, y=-12))
-            self.electric_field.objs[5].move_to_(loc=Location(x=-30, y=-20))
-            for obj in self.electric_field.objs[6:]:
-                if not obj.is_boundary:
-                    self._move_to_non_overlapped(obj)
+            self.electric_field.objs[0].move_to_(loc=Location(x=-10, y=0))
+            self.electric_field.objs[1].move_to_(loc=Location(x=10, y=0))
+            self.electric_field.objs[2].move_to_(loc=Location(x=0, y=10))
+            self.electric_field.objs[3].move_to_(loc=Location(x=0, y=-10))
+
+
+            # self.electric_field.objs[0].move_to_(loc=Location(x=-30, y=20))
+            # self.electric_field.objs[1].move_to_(loc=Location(x=-30, y=12))
+            # self.electric_field.objs[2].move_to_(loc=Location(x=-30, y=4))
+            # self.electric_field.objs[3].move_to_(loc=Location(x=-30, y=-4))
+            # self.electric_field.objs[4].move_to_(loc=Location(x=-30, y=-12))
+            # self.electric_field.objs[5].move_to_(loc=Location(x=-30, y=-20))
+            # for obj in self.electric_field.objs[6:]:
+            #     if not obj.is_boundary:
+            #         self._move_to_non_overlapped(obj)
 
     def run(
         self,
-        init_temp: float = 100.0,
-        threshold: float = 5.0,
-        cooling_factor: float = 9.5,
-        n_iters: int = 500,
+        init_temp: float = 0.3,
+        threshold: float = 0.001,
+        cooling_factor: float = 0.98,
+        n_iters: int = 30,
         only_eval: bool = False,
     ) -> None:
         """Optimize electric field."""
         init_field, init_reward = self.evaluate_electric_field()
-        infos, n_optimized = [(init_temp, init_reward)], 1
-        self.dump_img(init_field, init_reward, infos, title="0")
+        self.init_max_z = init_field.max()
+
+        infos = [(init_temp, init_reward)]
+        self.dump_img(self.electric_field.objs, init_field, init_reward, infos, title="0")
         if only_eval:
             return infos
 
         cur_temp, cur_reward = init_temp, init_reward
-        opt_reward, opt_field = init_reward, init_field
+        opt_reward, opt_field = init_reward, init_field, 
+        opt_objs = copy.deepcopy(self.electric_field.objs)
+
+        n_cooled = 1
         while cur_temp > threshold:
             for _ in range(n_iters):
                 obj = random.choice(self.electric_field.movable_objs)   
@@ -373,25 +388,26 @@ class SimulatedAnnealing:
 
                     # update the best !
                     if tmp_reward > opt_reward:   
-                        opt_reward, opt_field = tmp_reward, tmp_field
-                        self.dump_img(
-                            field=opt_field,
-                            reward=opt_reward,
-                            infos=infos,
-                            title=f"{n_optimized}"
-                        )
-                        n_optimized += 1
+                        opt_reward, opt_field = tmp_reward, tmp_field.copy()
+                        opt_objs = copy.deepcopy(self.electric_field.objs)
                 else:
                     obj.move_to_(ori_loc)
-        
+
             print(
                 f"Current Temperature: {cur_temp:.4f}, "
                 f"Potential Energy: {cur_reward:.6f}, "
                 f"Optimum: {opt_reward:.6f}"
             )
+            self.dump_img(
+                objs=opt_objs,
+                field=opt_field,
+                reward=opt_reward,
+                infos=infos,
+                title=f"{n_cooled}"
+            )
+            n_cooled += 1
             cur_temp *= cooling_factor
 
-        self.dump_img(field=opt_field, reward=opt_reward, infos=infos, title=f"{n_optimized}")
         self.make_gif()
     
     def  _move_to_non_overlapped(self, obj: Rectangle) -> Location:
@@ -426,21 +442,36 @@ class SimulatedAnnealing:
         if tmp_reward > cur_reward:
             return True
         
-        delta_e = (cur_reward - tmp_reward) * 1e4
+        delta_e = (cur_reward - tmp_reward)
         prob = np.exp(-delta_e / cur_temp)
         print(
-            f"Temp: {cur_temp:.2f}, Cur_R: {cur_reward:.6f}, "
-            f"Tmp_R: {tmp_reward:.6f}, Prob: {prob}"
+            f"Temp: {cur_temp:.6f}, "
+            f"Cur_R: {cur_reward:.6f}, Tmp_R: {tmp_reward:.6f}, "
+            f"delta_e: {delta_e:.6f}, Prob: {prob:.4f}"
         )
         return random.random() < prob
 
     def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
         """Return field and entropy."""
         field = self.electric_field.potential_field
-        return field, entropy(field, axis=None)
+        
+        # entropy
+        # reward = entropy(-field, axis=None)
+
+        # top-k mean
+        # num_count = int(N_ROWS * N_COLS * 0.1)
+        # reward = -np.mean(sorted(field.reshape(-1))[-num_count:]) / 5
+        
+        # only movable charges
+        reward = -np.mean(sorted(field.reshape(-1))[-4:]) / 5
+
+        # positive -> maximize
+        # negative -> minimize
+        return field, reward
 
     def dump_img(
         self, 
+        objs: list[Rectangle],
         field: np.ndarray, 
         reward: float, 
         infos: list[tuple[float, float]],
@@ -454,8 +485,9 @@ class SimulatedAnnealing:
         # plt.tight_layout()
         # plt.savefig("test.png")
 
-        objs = self.electric_field.objs
-        charges = self.electric_field.charges
+        charges = []
+        for obj in objs:
+            charges += obj.charges
 
         # set figure specs
         fig = make_subplots(
@@ -486,9 +518,9 @@ class SimulatedAnnealing:
         fig = self.make_learning_curve(fig, infos)
 
         fig.update_layout(
-            title_text=f"# of improved: {title}, Potential energy: {reward:.6f}", 
-            width=2400, 
-            height=1600,
+            title_text=f"# of iterations: {title}, Potential energy: {reward:.6f}", 
+            width=FIELD_WIDTH * 20,
+            height=FIELD_HEIGHT * 16,
         )
         
         fpath = self.save_dir / f"{title}.png"
@@ -517,7 +549,7 @@ class SimulatedAnnealing:
     ) -> go.Figure:
         """Draw charges."""
         c_locs = [
-            c.loc.get_idx(N_ROWS, N_COLS, FIELD_WIDTH, FIELD_HEIGHT, match_to_bin=False) 
+            c.loc.get_idx(match_to_bin=False) 
             for c in charges
         ]
         c_y, c_x = np.array(c_locs).transpose()
@@ -541,8 +573,8 @@ class SimulatedAnnealing:
         return fig
 
     def draw_surface(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
-        """Draw objects."""  
-        field = field.copy() - field.min()
+        """Draw objects."""
+        field = field.copy() / self.init_max_z
 
         fig.update_yaxes(range=[0, N_ROWS], dtick=1, row=1, col=1)
         fig.update_xaxes(range=[0, N_COLS], dtick=1, row=1, col=1)
@@ -595,32 +627,32 @@ class SimulatedAnnealing:
             row=2, 
             col=1,
         )
-        fig.add_shape(
-            type="line",
-            x0=max(df["x"]), 
-            x1=min(df["x"]), 
-            y0=9.691188, 
-            y1=9.691188,
-            line=dict(
-                color="gray", 
-                width=5,
-                dash="dashdot",
-            ),
-            row=2, 
-            col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[max(df["x"])], 
-                y=[9.69], 
-                text=["Human Expert"], 
-                mode="text",
-                textposition="bottom right",
-                showlegend=False,
-            ),
-            row=2,
-            col=1,
-        )
+        # fig.add_shape(
+        #     type="line",
+        #     x0=max(df["x"]), 
+        #     x1=min(df["x"]), 
+        #     y0=9.691188, 
+        #     y1=9.691188,
+        #     line=dict(
+        #         color="gray", 
+        #         width=5,
+        #         dash="dashdot",
+        #     ),
+        #     row=2, 
+        #     col=1,
+        # )
+        # fig.add_trace(
+        #     go.Scatter(
+        #         x=[max(df["x"])], 
+        #         y=[9.69], 
+        #         text=["Human Expert"], 
+        #         mode="text",
+        #         textposition="bottom right",
+        #         showlegend=False,
+        #     ),
+        #     row=2,
+        #     col=1,
+        # )
 
         fig.update_xaxes(
             autorange="reversed", 
@@ -629,7 +661,7 @@ class SimulatedAnnealing:
             row=2, 
             col=1,
         )
-        fig.update_yaxes(title_text="Entropy of Electric Potential", row=2, col=1)
+        fig.update_yaxes(title_text="Electric Potential", row=2, col=1)
         return fig
 
     def make_gif(self) -> None:
@@ -652,14 +684,14 @@ class SimulatedAnnealing:
 
 # opt. from random init
 # SimulatedAnnealing(df_path=None, save_dir=Path("save"), ticker="empty").run(only_eval=True)
-# SimulatedAnnealing(df_path=None, save_dir=Path("save"), ticker="").run()
+SimulatedAnnealing(df_path=None, save_dir=Path("save"), ticker="entropy_big_smoothing_softmax").run()
 
 # expert
-SimulatedAnnealing(
-    df_path=Path("data/expert.csv"), 
-    save_dir=Path("save"),
-    ticker="6301",
-).run()
+# SimulatedAnnealing(
+#     df_path=Path("data/expert.csv"), 
+#     save_dir=Path("save"),
+#     ticker="6301",
+# ).run(only_eval=False)
 
 # training
 # dirnames = {
@@ -716,7 +748,7 @@ SimulatedAnnealing(
 #         tickvals=x,
 #         ticktext=list(map(str, x)),
 #     ),
-#     yaxis_title="Entropy of Eletric Potential",
+#     yaxis_title="Eletric Potential",
 #     width=1400,
 #     height=800,
 # )
