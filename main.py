@@ -1,437 +1,111 @@
 import copy
-import math
 import random
 import shutil
 
 import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-import plotly.io as pio
 
-from scipy.stats import entropy
-from scipy.ndimage import gaussian_filter
-from scipy.special import softmax
-
-from plotly.subplots import make_subplots
-from PIL import Image
 from pathlib import Path
 
-# 6301 setting
-# FIELD_WIDTH = 105.3
-# FIELD_HEIGHT = 62.30000074101214
-FIELD_WIDTH = FIELD_HEIGHT = 100
-
-N_ROWS = 100
-N_COLS = int(N_ROWS * FIELD_WIDTH / FIELD_HEIGHT + 1)
-
-BIN_WIDTH, BIN_HEIGHT = FIELD_WIDTH / N_COLS, FIELD_HEIGHT / N_ROWS
-
-class Location:
-    """Basic location class."""
-
-    def __init__(self, x: float, y: float) -> None:
-        """Initialize."""
-        self.x, self.y = x, y
-
-    def get_idx(self, match_to_bin: bool = True) -> tuple[int]:
-        """Get bin inidcies."""
-        row_idx = ((self.y + FIELD_HEIGHT / 2) / FIELD_HEIGHT * N_ROWS)
-        col_idx = ((self.x + FIELD_WIDTH / 2) / FIELD_WIDTH * N_COLS)
-        if match_to_bin:
-            row_idx = np.floor(row_idx).astype(np.int64)
-            col_idx = np.floor(col_idx).astype(np.int64)
-        return row_idx, col_idx
-
-    @staticmethod
-    def discrete_to_continous(loc: tuple[int, int]) -> "Location":
-        """Convert discrete action to continuous coordinates."""
-        return Location(
-            x=(loc[1] + 0.5) * (FIELD_WIDTH / N_COLS) - FIELD_WIDTH / 2,
-            y=(loc[0] + 0.5) * (FIELD_HEIGHT / N_ROWS) - FIELD_HEIGHT / 2,
-        )
-
-    def __repr__(self) -> str:
-        return f"Location: {self.x, self.y}"
-
-
-class Charge:
-    """A base charge."""
-
-    def __init__(
-        self, 
-        loc: Location,
-        size: float = 1.0,
-    ) -> None:
-        """Initialize."""
-        self.loc = loc
-        self.size = size
-
-    @staticmethod
-    def compute_potential_energy(charges: list["Charge"], loc: Location) -> float:
-        """Compute potential energy from a charge at loc."""
-        force_x = force_y = 0.0
-        for c in charges:
-            x_distance = max(BIN_WIDTH, abs(loc.x - c.loc.x))
-            y_distance = max(BIN_HEIGHT, abs(loc.y - c.loc.y))
-            # if x_distance < BIN_WIDTH / 2 and y_distance < BIN_HEIGHT / 2:
-            #     continue
-
-            r = math.sqrt(x_distance ** 2 + y_distance ** 2)
-
-            # V = kQ/r
-            force = c.size / math.sqrt((r + 1.0))
-            theta = math.atan2(loc.y - c.loc.y, loc.x - c.loc.x)
-            force_x += force * math.cos(theta) if c.loc.x != loc.x else 0.0
-            force_y += force * math.sin(theta) if c.loc.y != loc.y else 0.0
-        
-        return math.sqrt(force_x ** 2 + force_y ** 2)
-
-    def __repr__(self) -> str:
-        """."""
-        return f"size: {self.size}, loc: {self.loc.x, self.loc.y}"
-
-
-class Rectangle:
-    """A basic rectangle class."""
-
-    def __init__(
-        self, 
-        name: str,
-        x: float, 
-        y: float, 
-        width: float, 
-        height: float,
-        charges: list[str] = None,
-        fixed: bool = False,
-        is_boundary: bool = False,
-    ) -> None:
-        """Initialize."""
-        self.name = name
-
-        self.center = Location(x=x, y=y)
-        self.width = width
-        self.height = height
-
-        if charges:
-            self.charges = [
-                Charge(
-                    loc=Location(
-                        x=cx - FIELD_WIDTH / 2,
-                        y=cy - FIELD_HEIGHT / 2,
-                    ),
-                    size=1,
-                )
-                for cx, cy in map(eval, charges)
-            ]
-            self.charge_locs = [
-                (c.loc.x - self.center.x, c.loc.y - self.center.y) for c in self.charges
-            ]
-        else:
-            self.charges = [Charge(loc=Location(x=x, y=y), size=self.size)]
-            self.charge_locs = [(0.0, 0.0)]
-
-        self.fixed = fixed
-        self.is_boundary = is_boundary
-
-    @staticmethod
-    def intersect_between(rect_i: "Rectangle", rect_j: "Rectangle") -> bool:
-        """Check if two rectangles are intersectd."""
-        if rect_i.bottom_left.x > rect_j.top_right.x or rect_i.top_right.x < rect_j.bottom_left.x:
-            return False
-        if rect_i.bottom_left.y > rect_j.top_right.y or rect_i.top_right.y < rect_j.bottom_left.y:
-            return False
-        return True
-
-    @property
-    def size(self) -> float:
-        """Get size."""
-        return self.width * self.height
-    
-    @property
-    def bottom_left(self) -> Location:
-        """."""
-        return Location(x=self.center.x - self.width / 2, y=self.center.y - self.height / 2)
-
-    @property
-    def top_right(self) -> Location:
-        """."""
-        return Location(x=self.center.x + self.width / 2, y=self.center.y + self.height / 2)
-
-    def move_to_(self, loc: Location) -> None:
-        """Move this rectangle and its charges."""
-        self.center = loc
-        for c, c_loc in zip(self.charges, self.charge_locs):
-            c.loc = Location(x=self.center.x + c_loc[0], y=self.center.y + c_loc[1])
-
-    def draw_rectangle(self, fig: go.Figure) -> go.Figure:
-        """."""
-        fig.add_shape(
-            x0=(self.bottom_left.x / FIELD_WIDTH + 0.5) * N_COLS,
-            x1=(self.top_right.x / FIELD_WIDTH + 0.5) * N_COLS,
-            y0=(self.bottom_left.y / FIELD_HEIGHT + 0.5) * N_ROWS,
-            y1=(self.top_right.y / FIELD_HEIGHT + 0.5) * N_ROWS,
-            line=dict(color="Black" if self.fixed else "RoyalBlue"),
-            fillcolor="LightGray" if self.fixed else "LightSkyBlue",
-            opacity=0.8 if self.fixed else 0.5,
-        )
-        return fig
-
-
-class ElectricField:
-    """A electric field class."""
-
-    def __init__(self, df_path: str) -> None:
-        """Initialize."""
-        if df_path:
-            import pandas as pd
-            
-            df = pd.read_csv(df_path)
-            self.objs = [
-                Rectangle(
-                    name=row["Name"],
-                    x=row["left"] + row["width"] / 2 - FIELD_WIDTH / 2,
-                    y=row["top"] + row["height"] / 2 - FIELD_HEIGHT / 2,
-                    width=row["width"],
-                    height=row["height"],
-                    fixed=row["Fixed"],
-                    charges=eval(row["pins"]),
-                )
-                for row in df.iloc
-                if row["PlacedLayer"] == "TOP"
-            ]
-        else:
-            # make objects to be optimized
-            # self.objs = []
-            self.objs = [
-                Rectangle(
-                    name=str(_),
-                    # x=-FIELD_WIDTH / 2, y=-FIELD_HEIGHT / 2,
-                    # x=0.0, y=0.0,
-                    x=random.random() * FIELD_WIDTH - FIELD_WIDTH / 2,
-                    y=random.random() * FIELD_HEIGHT - FIELD_HEIGHT / 2,
-                    width=10,
-                    height=10,
-                    # width=random.random() * 4 + 4,
-                    # height=random.random() * 4 + 4,
-                )
-                for _ in range(4)
-            ]
-            # self.objs = sorted(self.objs, key=lambda rect: rect.size, reverse=True)
-            # for obj in self.objs[:6]:
-            #     obj.fixed = True
-
-        self._add_boundary_charges(width=3, height=3)
-            
-        # get movable objects
-        self.movable_objs = [obj for obj in self.objs if not obj.fixed]
-
-        self.charges = []
-        for obj in self.objs:
-            self.charges += obj.charges
-
-    @property
-    def potential_field(self) -> np.ndarray:
-        """Compute the potential energy of each location."""
-        field = np.array(
-            [
-                Charge.compute_potential_energy(self.charges, self.compute_bin_location(idx))
-                for idx in range(N_ROWS * N_COLS)
-            ]
-        ).reshape((N_ROWS, N_COLS))
-
-        # electric potential
-        field = gaussian_filter(field, sigma=2)
-        field = softmax(np.log(field + 1.0))
-        return field
-
-    def compute_bin_location(self, idx: int) -> Location:
-        """Compute a location of the center of bin."""
-        row_idx, col_idx = divmod(idx, N_COLS)    
-        return Location(
-            x=(col_idx + 0.5) * BIN_WIDTH - FIELD_WIDTH / 2, 
-            y=(row_idx + 0.5) * BIN_HEIGHT - FIELD_HEIGHT / 2,
-        )
-    
-    def _add_boundary_charges(self, width: float, height: float) -> None:
-        """Add boundary objects."""
-        default_size = 1.0
-
-        # top
-        nc = max(math.floor(FIELD_WIDTH / width), 1)
-        self.objs += [
-            Rectangle(
-                name="boundary_top",
-                x=x_coord,
-                y=FIELD_HEIGHT / 2,
-                width=width,
-                height=default_size,
-                fixed=True,
-                is_boundary=True,
-            )
-            for x_coord in np.linspace(0, width * (nc - 1), nc) - (nc - 1) * width / 2
-        ]
-        # bottom
-        self.objs += [
-            Rectangle(
-                name="boundary_bottom",
-                x=x_coord,
-                y=-FIELD_HEIGHT / 2,
-                width=width,
-                height=default_size,
-                fixed=True,
-                is_boundary=True,
-            )
-            for x_coord in np.linspace(0, width * (nc - 1), nc) - (nc - 1) * width / 2
-        ]
-        # left
-        nc = max(math.floor(FIELD_HEIGHT / height), 1)
-        self.objs += [
-            Rectangle(
-                name="boundary_left",
-                x=-FIELD_WIDTH / 2,
-                y=y_coord,
-                width=default_size,
-                height=height,
-                fixed=True,
-                is_boundary=True,
-            )
-            for y_coord in np.linspace(0, height * (nc - 1), nc) - (nc - 1) * height / 2
-        ]
-        # right
-        self.objs += [
-            Rectangle(
-                name="boundary_right",
-                x=FIELD_WIDTH / 2,
-                y=y_coord,
-                width=default_size,
-                height=height,
-                fixed=True,
-                is_boundary=True,
-            )
-            for y_coord in np.linspace(0, height * (nc - 1), nc) - (nc - 1) * height / 2
-        ]
+from electric_field import ElectricField, Atom
+from specs import *
+from plotter import Plotter
+from utils import GridLoc, N_COLS, N_ROWS, FIELD_WIDTH, FIELD_HEIGHT
 
 
 class SimulatedAnnealing:
-    """Do SA."""
-
+    """Do simulated annealing to optimize."""
+    
     def __init__(
         self,
-        df_path: str = "data/expert.csv",
-        save_dir: str = "save",
-        ticker: str = "",
+        electric_field: ElectricField,
+        init_temp: float = 1e-1,
+        threshold: float = 1e-4,
+        cooling_factor: float = 0.95,
+        n_iters: int = 2000,
+        save_dir: str = "test",
     ) -> None:
         """Initialize."""
-        self.electric_field = ElectricField(df_path)
+        self.electric_field = electric_field
 
-        # random init
-        # for obj in self.electric_field.objs:
-        #     if not obj.fixed:
-        #         self._move_to_non_overlapped(obj)
-
-        self.save_dir = Path(f"{save_dir}_{ticker}")
-        self.save_dir.mkdir(exist_ok=True, parents=True)
-        self.ticker = ticker
-
-        # resolve overlapping first
-        if not df_path:
-            self.electric_field.objs[0].move_to_(loc=Location(x=-10, y=0))
-            self.electric_field.objs[1].move_to_(loc=Location(x=10, y=0))
-            self.electric_field.objs[2].move_to_(loc=Location(x=0, y=10))
-            self.electric_field.objs[3].move_to_(loc=Location(x=0, y=-10))
-
-
-            # self.electric_field.objs[0].move_to_(loc=Location(x=-30, y=20))
-            # self.electric_field.objs[1].move_to_(loc=Location(x=-30, y=12))
-            # self.electric_field.objs[2].move_to_(loc=Location(x=-30, y=4))
-            # self.electric_field.objs[3].move_to_(loc=Location(x=-30, y=-4))
-            # self.electric_field.objs[4].move_to_(loc=Location(x=-30, y=-12))
-            # self.electric_field.objs[5].move_to_(loc=Location(x=-30, y=-20))
-            # for obj in self.electric_field.objs[6:]:
-            #     if not obj.is_boundary:
-            #         self._move_to_non_overlapped(obj)
-
-    def run(
-        self,
-        init_temp: float = 0.3,
-        threshold: float = 0.001,
-        cooling_factor: float = 0.98,
-        n_iters: int = 30,
-        only_eval: bool = False,
-    ) -> None:
-        """Optimize electric field."""
-        init_field, init_reward = self.evaluate_electric_field()
-        self.init_max_z = init_field.max()
-
-        infos = [(init_temp, init_reward)]
-        self.dump_img(self.electric_field.objs, init_field, init_reward, infos, title="0")
-        if only_eval:
-            return infos
-
-        cur_temp, cur_reward = init_temp, init_reward
-        opt_reward, opt_field = init_reward, init_field, 
-        opt_objs = copy.deepcopy(self.electric_field.objs)
-
-        n_cooled = 1
-        while cur_temp > threshold:
-            for _ in range(n_iters):
-                obj = random.choice(self.electric_field.movable_objs)   
-                
-                ori_loc = obj.center
-                obj.move_to_(self._move_to_non_overlapped(obj))
-
-                tmp_field, tmp_reward = self.evaluate_electric_field()
-
-                if self.is_allowed(cur_temp, cur_reward, tmp_reward):
-                    infos.append((cur_temp, tmp_reward))
-                    cur_reward = tmp_reward
-
-                    # update the best !
-                    if tmp_reward > opt_reward:   
-                        opt_reward, opt_field = tmp_reward, tmp_field.copy()
-                        opt_objs = copy.deepcopy(self.electric_field.objs)
-                else:
-                    obj.move_to_(ori_loc)
-
-            print(
-                f"Current Temperature: {cur_temp:.4f}, "
-                f"Potential Energy: {cur_reward:.6f}, "
-                f"Optimum: {opt_reward:.6f}"
-            )
-            self.dump_img(
-                objs=opt_objs,
-                field=opt_field,
-                reward=opt_reward,
-                infos=infos,
-                title=f"{n_cooled}"
-            )
-            n_cooled += 1
-            cur_temp *= cooling_factor
-
-        self.make_gif()
-    
-    def  _move_to_non_overlapped(self, obj: Rectangle) -> Location:
-        """."""
-        non_boundaries = [
-            tg_obj
-            for tg_obj in self.electric_field.objs 
-            if not tg_obj.is_boundary and tg_obj.name != obj.name
+        self.init_temp = init_temp
+        self.threshold = threshold
+        self.cooling_factor = cooling_factor
+        self.n_iters = n_iters
+        
+        rows, cols = np.indices((N_ROWS, N_COLS))
+        self.available_actions = [
+            GridLoc(row=row, col=col) 
+            for row, col in zip(rows.reshape(-1), cols.reshape(-1))
         ]
 
-        available_x = (obj.width - FIELD_WIDTH)
-        available_y = (obj.height - FIELD_HEIGHT)
+        self.ready_to_run(save_dir=save_dir)
 
-        while True:
-            x = random.random() * available_x - available_x / 2
-            y = random.random() * available_y - available_y / 2
+    def run(self, is_eval: bool = False) -> float:
+        """Do optimization."""
+        if is_eval:
+            return self.init_reward
+
+        n_cooled, cur_temp, cur_reward = 1, self.init_temp, self.init_reward
+        while cur_temp > self.threshold:
+            for _ in range(self.n_iters):
+                atom = self.get_an_atom_to_move()
+                ori_loc = atom.loc
+
+                tmp_loc = self.get_a_valid_location_to_move(atom)
+                atom.move_to_(tmp_loc)
+                tmp_reward = self.electric_field.evaluate()
+
+                # do an action or not ?
+                if self.is_allowed(cur_temp, cur_reward, tmp_reward):
+                    cur_reward = tmp_reward
+                
+                    # update the best !
+                    if tmp_reward > self.opt_reward:
+                        self.opt_reward = tmp_reward
+                        self.opt_field = copy.deepcopy(self.electric_field)
+                        Plotter.plot_electric_density_field(
+                            electric_field=self.electric_field,
+                            title=(f"Optimal Score: {self.opt_reward:.6f}"),
+                            fpath=self.save_dir / "optimal.png",
+                        )
+                else:
+                    atom.move_to_(ori_loc)
             
-            obj.move_to_(Location(x=x, y=y))
-            if not any(
-                Rectangle.intersect_between(rect_i=obj, rect_j=tg_obj) for tg_obj in non_boundaries
-            ): 
-                break
-        return Location(x=x, y=y)
+            print(
+                f"Current Temperature: {cur_temp:.6f}, "
+                f"Potential Energy: {cur_reward:.6f}, "
+                f"Optimum: {self.opt_reward:.6f}"
+            )
+            fpath = self.save_dir / f"{n_cooled}.png"
+            Plotter.plot_electric_density_field(
+                electric_field=self.electric_field,
+                title=(
+                    f"# of iterations: {n_cooled}, "
+                    f"Current Score: {cur_reward:.6f}, "
+                    f"Optimal Score: {self.opt_reward:.6f}"
+                ),
+                fpath=fpath,
+            )
+            shutil.copy(src=fpath, dst=self.save_dir / "last.png")
+            n_cooled += 1
+            cur_temp *= self.cooling_factor
 
+            if cur_reward < self.opt_reward:
+                self.electric_field = copy.deepcopy(self.opt_field)
+
+        # save the optimal
+        Plotter.plot_electric_density_field(
+            electric_field=self.opt_field,
+            title=(
+                f"# of iterations: {n_cooled}, "
+                f"Current Score: {self.opt_reward:.6f}, "
+                f"Optimal Score: {self.opt_reward:.6f}"
+            ),
+            fpath=fpath,
+        )
+        Plotter.make_gif(self.save_dir)
+        return self.opt_reward
+    
     def is_allowed(
         self,
         cur_temp: float,
@@ -450,306 +124,67 @@ class SimulatedAnnealing:
             f"delta_e: {delta_e:.6f}, Prob: {prob:.4f}"
         )
         return random.random() < prob
-
-    def evaluate_electric_field(self) -> tuple[np.ndarray, float]:
-        """Return field and entropy."""
-        field = self.electric_field.potential_field
         
-        # entropy
-        # reward = entropy(-field, axis=None)
-
-        # top-k mean
-        # num_count = int(N_ROWS * N_COLS * 0.1)
-        # reward = -np.mean(sorted(field.reshape(-1))[-num_count:]) / 5
-        
-        # only movable charges
-        reward = -np.mean(sorted(field.reshape(-1))[-4:]) / 5
-
-        # positive -> maximize
-        # negative -> minimize
-        return field, reward
-
-    def dump_img(
-        self, 
-        objs: list[Rectangle],
-        field: np.ndarray, 
-        reward: float, 
-        infos: list[tuple[float, float]],
-        title: str = "Default") -> None:
-        """Dump img."""
-        # import seaborn as sns
-        # import matplotlib.pyplot as plt
-
-        # plt.close()
-        # sns.heatmap(field[::-1], cbar=False)
-        # plt.tight_layout()
-        # plt.savefig("test.png")
-
-        charges = []
-        for obj in objs:
-            charges += obj.charges
-
-        # set figure specs
-        fig = make_subplots(
-            rows=2, 
-            cols=2, 
-            specs=[
-                [{'is_3d': False}, {'is_3d': True}],
-                [{'colspan': 2, 'is_3d': False}, None],
-            ],
-            row_heights=[0.5, 0.3],
-            horizontal_spacing=0.04,
-            vertical_spacing=0.1,
-            subplot_titles=[
-                "2D Placement",  # (1, 1)
-                "3D Contour Grpah",  # (1, 2)
-                "Learning Curve",  # (2, 1-2)
-            ],
-        )
-
-        # 2d - contour / charges / box
-        fig = self.draw_potential_field(fig, field=field)
-        fig = self.draw_objects_and_charges(fig, objs=objs, charges=charges)
-
-        # 3d
-        fig = self.draw_surface(fig, field=field)
-
-        # learning curve
-        fig = self.make_learning_curve(fig, infos)
-
-        fig.update_layout(
-            title_text=f"# of iterations: {title}, Potential energy: {reward:.6f}", 
-            width=FIELD_WIDTH * 20,
-            height=FIELD_HEIGHT * 16,
-        )
-        
-        fpath = self.save_dir / f"{title}.png"
-        pio.write_image(fig, fpath)
-        shutil.copy(src=fpath, dst=self.save_dir / f"optimal_{self.ticker}.png")
+    def get_an_atom_to_move(self) -> Atom:
+        """Get an atom to move."""
+        return random.choice(self.electric_field.movable_atoms)
     
-    def draw_potential_field(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
-        """Draw contour graph."""
-        fig.add_trace(
-            go.Contour(
-                x=np.linspace(0, N_COLS - 1, N_COLS) + 0.5,
-                y=np.linspace(0, N_ROWS - 1, N_ROWS) + 0.5,
-                z=field, 
-                showscale=False,
-            ), 
-            row=1, 
-            col=1,
-        )
-        return fig
-
-    def draw_objects_and_charges(
-        self, 
-        fig: go.Figure, 
-        objs: list[Rectangle], 
-        charges: list[Charge]
-    ) -> go.Figure:
-        """Draw charges."""
-        c_locs = [
-            c.loc.get_idx(match_to_bin=False) 
-            for c in charges
+    def get_a_valid_location_to_move(self, atom: Atom) -> GridLoc:
+        """Get a valid action."""
+        ori_loc = atom.loc
+        tg_atoms = [
+            a 
+            for a in self.electric_field.atoms 
+            if atom.name != a.name and not a.is_boundary
         ]
-        c_y, c_x = np.array(c_locs).transpose()
-        text_labels = ["" if o.is_boundary else f"{o.name}" for o in objs]
-        fig.add_trace(
-            go.Scatter(
-                x=c_x, 
-                y=c_y,
-                text=text_labels,
-                mode="markers+text",
-                marker=dict(color="black"),
-                textposition="top right",
-                textfont=dict(color="white"),
-                showlegend=False,
-            ),
-            row=1,
-            col=1,
-        )
-        for obj in objs:
-            fig = obj.draw_rectangle(fig)
-        return fig
+        while True:
+            loc = random.choice(self.available_actions)
+            atom.move_to_(loc=loc, move_charges_too=False)
 
-    def draw_surface(self, fig: go.Figure, field: np.ndarray) -> go.Figure:
-        """Draw objects."""
-        field = field.copy() / self.init_max_z
+            # it is out of field
+            if (
+                atom.top_right.x > FIELD_WIDTH / 2
+                or atom.top_right.y > FIELD_HEIGHT / 2
+                or atom.bottom_left.x < -FIELD_WIDTH / 2
+                or atom.bottom_left.y < -FIELD_HEIGHT / 2
+            ):
+                continue
 
-        fig.update_yaxes(range=[0, N_ROWS], dtick=1, row=1, col=1)
-        fig.update_xaxes(range=[0, N_COLS], dtick=1, row=1, col=1)
+            # overlapped with others
+            if any(Atom.intersect_between(atom, tg_atom) for tg_atom in tg_atoms):
+                continue
 
-        # 3d
-        z = np.array([row[::-1] for row in field[::-1]])
-        fig.add_trace(
-            go.Surface(
-                x=[str(i) for i in range(N_COLS)][::-1],
-                y=[str(i) for i in range(N_ROWS)][::-1],
-                z=z,
-                showscale=False,
-            ),
-            row=1,
-            col=2,
-        )
-        fig.update_scenes(zaxis=dict(range=[0, 1.0]), row=1, col=2)
-        fig.update_layout(scene_aspectmode='auto')
-        return fig
+            break
+    
+        # revert atom locations
+        atom.move_to_(loc=ori_loc)
+        return loc
 
-    def make_learning_curve(self, fig: go.Figure, infos: list[float]) -> go.Figure:
-        """Draw leanring curve."""
-        if not infos:
-            return fig
-
-        x, y = np.array(infos).transpose()
+    def ready_to_run(self, save_dir: str) -> None:
+        """Ready to optimize field."""
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
         
-        # add scatters
-        fig.add_trace(
-            go.Scatter(
-                x=x,
-                y=y,
-                mode="markers", 
-                marker=dict(opacity=0.4, color="LightSkyBlue"),
-                showlegend=False,
+        # do init
+        self.init_reward = self.opt_reward = self.electric_field.evaluate()
+        self.opt_field = copy.deepcopy(self.electric_field)
+
+        # logging the init info
+        print(f"Init reward : {self.init_reward:.6f}")
+
+        fpath = self.save_dir / "0.png"
+        Plotter.plot_electric_density_field(
+            electric_field=self.electric_field,
+            title=(
+                f"# of iterations: 0, "
+                f"Current Score: {self.init_reward:.6f}, "
+                f"Optimal Score: {self.opt_reward:.6f}"
             ),
-            row=2,
-            col=1,
+            fpath=fpath,
         )
-        # add average line
-        df = pd.DataFrame({"x": x, "y": y}).groupby(by="x").mean().reset_index()
-        fig.add_trace(
-            go.Scatter(
-                x=df["x"], 
-                y=df["y"], 
-                mode="lines", 
-                line=dict(color="SkyBlue"),
-                showlegend=False,
-            ),
-            row=2, 
-            col=1,
-        )
-        # fig.add_shape(
-        #     type="line",
-        #     x0=max(df["x"]), 
-        #     x1=min(df["x"]), 
-        #     y0=9.691188, 
-        #     y1=9.691188,
-        #     line=dict(
-        #         color="gray", 
-        #         width=5,
-        #         dash="dashdot",
-        #     ),
-        #     row=2, 
-        #     col=1,
-        # )
-        # fig.add_trace(
-        #     go.Scatter(
-        #         x=[max(df["x"])], 
-        #         y=[9.69], 
-        #         text=["Human Expert"], 
-        #         mode="text",
-        #         textposition="bottom right",
-        #         showlegend=False,
-        #     ),
-        #     row=2,
-        #     col=1,
-        # )
+        shutil.copy(src=fpath, dst=self.save_dir / "optimal.png")
 
-        fig.update_xaxes(
-            autorange="reversed", 
-            type="log",
-            title_text="Temperature", 
-            row=2, 
-            col=1,
-        )
-        fig.update_yaxes(title_text="Electric Potential", row=2, col=1)
-        return fig
-
-    def make_gif(self) -> None:
-        """Make a .gif file."""
-        # List image files
-        image_files = [fpath for fpath in self.save_dir.iterdir() if "optimal" not in fpath.stem]
-        image_files = sorted(image_files, key=lambda x: int(x.stem))
-        images = [Image.open(x) for x in image_files]
-        
-        im = images[0]
-        im.save(
-            self.save_dir / f'result_{self.ticker}.gif', 
-            save_all=True, 
-            append_images=images[1:],
-            loop=0xff, 
-            duration=300,
-        )
-        print("Done")
-
-
-# opt. from random init
-# SimulatedAnnealing(df_path=None, save_dir=Path("save"), ticker="empty").run(only_eval=True)
-SimulatedAnnealing(df_path=None, save_dir=Path("save"), ticker="entropy_big_smoothing_softmax").run()
-
-# expert
-# SimulatedAnnealing(
-#     df_path=Path("data/expert.csv"), 
-#     save_dir=Path("save"),
-#     ticker="6301",
-# ).run(only_eval=False)
-
-# training
-# dirnames = {
-#     "best": {
-#         "path": Path("/home/wooshik.myung/mrx/lg-pcb/save/240319_053020_EAX67606301_240226_excel_v2/logging_files/best_placements"),
-#         "color": "SkyBlue",
-#     },
-#     "eval": {
-#         "path": Path("/home/wooshik.myung/mrx/lg-pcb/save/240319_053020_EAX67606301_240226_excel_v2/logging_files/eval_placements"),
-#         "color": "Orange",
-#     }
-# }
-# fig = go.Figure()
-# for ticker, info in dirnames.items():
-#     rewards = []
-#     fpaths = sorted(info["path"].glob("*.csv"), key=lambda p: int(p.stem.split("_")[-1]))
-
-#     # fpaths = [fpaths[0], fpaths[10], fpaths[-1]]
-#     for fpath in fpaths:
-#         print(fpath)
-        
-#         n_iter = fpath.stem.split("_")[-1]
-#         # do only eval
-#         reward = SimulatedAnnealing(
-#             df_path=fpath, 
-#             save_dir=Path(f"save_{ticker}") / "rl", 
-#             ticker=fpath.stem.split("_")[-1],
-#         ).run(only_eval=True)[-1][-1]
-#         rewards.append((int(n_iter), reward))
-
-#     x, y = np.array(rewards).transpose()
-#     fig.add_trace(
-#         go.Scatter(
-#             x=x,
-#             y=y,
-#             line=dict(color=info["color"]),
-#             name=ticker,
-#         ),
-#     )
-
-# fig.add_hline(
-#     y=9.691188, 
-#     line_dash="dash", 
-#     line_color="gray", 
-#     line_width=2.5,
-#     annotation_text="Human Expert",
-#     annotation_font_size=15,
-#     annotation_position="bottom left",
-# )
-# fig.update_layout(
-#     xaxis_title="# of Iterations",
-#     xaxis=dict(
-#         tickmode="array",
-#         tickvals=x,
-#         ticktext=list(map(str, x)),
-#     ),
-#     yaxis_title="Eletric Potential",
-#     width=1400,
-#     height=800,
-# )
-# pio.write_image(fig, "curve.png")
+SimulatedAnnealing(
+    electric_field=ElectricField(atoms=EXPERT_ATOMS),
+    save_dir="expert_sheet_number",
+).run()

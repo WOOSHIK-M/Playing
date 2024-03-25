@@ -1,3 +1,5 @@
 save/
 *.png
 *.gif
+
+__pycache__
